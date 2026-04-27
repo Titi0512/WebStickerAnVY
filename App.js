@@ -1,7 +1,6 @@
-import React, { useState, useRef } from 'react';
-import { Download, RefreshCw, Camera, Image as ImageIcon, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Upload, Trash2, Plus, Sparkles } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Download, RefreshCw, Camera, Image as ImageIcon, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Upload, Trash2, Plus, Sparkles, XCircle } from 'lucide-react';
 
-// Mở rộng lên 30 trạng thái đa dạng
 const STICKER_LIST = [
   { id: 1, text: "chào buổi sáng!", expression: "vui vẻ, cười mỉm nhẹ nhàng" },
   { id: 2, text: "cái giề?", expression: "nhìn nghiêng, vẻ mặt thắc mắc, nhướng mày" },
@@ -23,7 +22,6 @@ const STICKER_LIST = [
   { id: 18, text: "số 1!", expression: "vẻ mặt hào hứng, phấn khích tột độ" },
   { id: 19, text: "hmmm...", expression: "vẻ mặt đang đăm chiêu suy nghĩ, cau mày" },
   { id: 20, text: "pái pai!", expression: "vẻ mặt vui vẻ cười tươi tắn" },
-  // 10 Trạng thái mới bổ sung
   { id: 21, text: "Trời ơi!", expression: "sốc, hai mắt nhắm nghiền, miệng há hốc" },
   { id: 22, text: "Moah~", expression: "chu mỏ đáng yêu như đang hôn" },
   { id: 23, text: "Thích quá!", expression: "mắt sáng rực, cười tít cả mắt" },
@@ -44,10 +42,13 @@ const App = () => {
   
   const [sourceImages, setSourceImages] = useState([]); 
   const fileInputRef = useRef(null);
+  
+  // Tối ưu 1: Ref kiểm soát việc hủy tiến trình (Abort Controller)
+  const isCancelledRef = useRef(false);
 
   const apiKey = ""; 
 
-  // Tối ưu hóa: Nén ảnh mạnh hơn (max 600px) để AI xử lý siêu tốc mà không mất nét
+  // Tối ưu hóa bộ nhớ: Giảm size xuống 500px, đủ nét cho sticker, siêu nhẹ cho API
   const compressImage = (file) => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -55,8 +56,8 @@ const App = () => {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 600; 
-          const MAX_HEIGHT = 600;
+          const MAX_WIDTH = 500; 
+          const MAX_HEIGHT = 500;
           let width = img.width;
           let height = img.height;
 
@@ -71,7 +72,7 @@ const App = () => {
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL(file.type, 0.85)); 
+          resolve(canvas.toDataURL(file.type, 0.8)); 
         };
         img.src = event.target.result;
       };
@@ -81,18 +82,19 @@ const App = () => {
 
   const handleImageUpload = async (e) => {
     const files = Array.from(e.target.files);
-    setIsGenerating(true); // Hiển thị loading trong lúc nén
     
+    // Nếu đang tạo thì không cho upload thêm để tránh xung đột state
+    if (isGenerating) return; 
+
+    setError(null);
     for (const file of files) {
       if (file.size > 15 * 1024 * 1024) { 
         setError("Có ảnh vượt quá 15MB, vui lòng chọn ảnh nhẹ hơn.");
         continue;
       }
-      
       try {
         const compressedDataUrl = await compressImage(file);
         const base64 = compressedDataUrl.split(',')[1];
-        
         const newImage = {
           id: Math.random().toString(36).substr(2, 9),
           base64: base64,
@@ -100,26 +102,22 @@ const App = () => {
           mimeType: file.type
         };
         setSourceImages(prev => [...prev, newImage]);
-        setError(null);
       } catch (err) {
         console.error("Lỗi nén ảnh", err);
       }
     }
-    
+    // Reset trạng thái sticker về ban đầu khi có ảnh mới
     setStickers(STICKER_LIST.map(s => ({ ...s, url: null, status: 'idle' })));
-    setIsGenerating(false);
   };
 
   const removeImage = (id) => {
+    if (isGenerating) return;
     setSourceImages(prev => prev.filter(img => img.id !== id));
     setStickers(STICKER_LIST.map(s => ({ ...s, url: null, status: 'idle' })));
   };
 
   const generateSticker = async (sticker, index) => {
-    if (sourceImages.length === 0) {
-      setError("Vui lòng tải ít nhất một ảnh của bé lên.");
-      return;
-    }
+    if (isCancelledRef.current) return; // Chặn thực thi nếu bị hủy
 
     setStickers(prev => {
       const newStickers = [...prev];
@@ -127,10 +125,8 @@ const App = () => {
       return newStickers;
     });
 
-    // PROMPT BẢO MẬT ĐỘ TRUNG THỰC (Super Fidelity)
     const prompt = `Bạn là một AI xử lý ảnh (Photo Editor). 
     NHIỆM VỤ: Chỉnh sửa khuôn mặt em bé TỪ ĐÚNG CÁC ẢNH GỐC BÊN DƯỚI. ĐÂY LÀ YÊU CẦU BẮT BUỘC.
-    
     NGUYÊN TẮC KHÔNG THỎA HIỆP:
     1. COPY-PASTE KHUÔN MẶT: Bắt buộc dùng đúng 100% hình dáng mắt, mũi, miệng, má phúng phính và kiểu tóc của em bé trong ảnh. 
     2. KHÔNG AI-GENERATED: Không được tạo ra một em bé ảo khác. Không được dùng filter hoạt hình hay làm mịn da quá đà.
@@ -139,6 +135,8 @@ const App = () => {
     5. ĐỊNH DẠNG: Ảnh thật tách nền, có viền trắng dày bọc quanh toàn bộ (chuẩn sticker Zalo).`;
 
     const fetchWithRetry = async (retries = 0) => {
+      if (isCancelledRef.current) return; // Chặn trước khi gửi request mới
+
       try {
         const imageParts = sourceImages.map(img => ({
           inlineData: { mimeType: img.mimeType, data: img.base64 }
@@ -148,17 +146,8 @@ const App = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  ...imageParts
-                ]
-              }
-            ],
-            generationConfig: {
-              responseModalities: ["IMAGE"]
-            }
+            contents: [{ parts: [{ text: prompt }, ...imageParts] }],
+            generationConfig: { responseModalities: ["IMAGE"] }
           })
         });
 
@@ -169,6 +158,9 @@ const App = () => {
         
         if (!base64Data) throw new Error("AI không xuất được ảnh.");
 
+        // Nếu bị hủy trong lúc chờ API phản hồi, vứt bỏ kết quả
+        if (isCancelledRef.current) return; 
+
         const imageUrl = `data:image/png;base64,${base64Data}`;
         
         setStickers(prev => {
@@ -178,9 +170,12 @@ const App = () => {
           return newStickers;
         });
       } catch (err) {
-        if (retries < 3) { // Giảm retry xuống 3 để tránh treo app lâu
-          const delay = Math.pow(2, retries) * 1500;
-          setTimeout(() => fetchWithRetry(retries + 1), delay);
+        if (isCancelledRef.current) return;
+        
+        if (retries < 2) { // Giảm retry để luồng không bị tắc nghẽn quá lâu
+          const delayTime = Math.pow(2, retries) * 1000;
+          await new Promise(res => setTimeout(res, delayTime));
+          await fetchWithRetry(retries + 1);
         } else {
           setStickers(prev => {
             const newStickers = [...prev];
@@ -194,37 +189,64 @@ const App = () => {
     await fetchWithRetry();
   };
 
-  const delay = (ms) => new Promise(res => setTimeout(res, ms));
-
+  // Tối ưu 2: Hàng đợi luồng xử lý (Concurrency Promise Pool)
   const generateAll = async () => {
     if (sourceImages.length === 0) {
       setError("Vui lòng tải ảnh nguồn lên trước.");
       return;
     }
+    
     setIsGenerating(true);
     setError(null);
     setProgress(0);
+    isCancelledRef.current = false;
     
-    // Xử lý song song an toàn: Batch size = 3, có delay để API không bị ngộp
-    const BATCH_SIZE = 3;
     const pendingStickers = stickers.map((s, i) => ({ ...s, originalIndex: i })).filter(s => s.status !== 'done');
+    let completedCount = stickers.length - pendingStickers.length;
 
-    let completed = stickers.length - pendingStickers.length;
+    // Giới hạn xử lý song song tối đa 3 tác vụ cùng lúc để đảm bảo mạng mượt mà
+    const CONCURRENCY_LIMIT = 3; 
+    let currentIndex = 0;
 
-    for (let i = 0; i < pendingStickers.length; i += BATCH_SIZE) {
-      const batch = pendingStickers.slice(i, i + BATCH_SIZE);
-      await Promise.all(batch.map(s => generateSticker(s, s.originalIndex)));
-      
-      completed += batch.length;
-      setProgress(Math.round((completed / stickers.length) * 100));
-      
-      // Nghỉ 1 giây giữa các đợt để đảm bảo tốc độ mạng & API ổn định
-      if (i + BATCH_SIZE < pendingStickers.length) {
-        await delay(1000); 
+    // Worker function tự động lấy task tiếp theo khi xong task hiện tại
+    const worker = async () => {
+      while (currentIndex < pendingStickers.length) {
+        if (isCancelledRef.current) break; // Thoát luồng nếu người dùng ấn Hủy
+        
+        const taskIndex = currentIndex;
+        currentIndex++; // Chuyển sang task tiếp theo cho worker khác
+        
+        const task = pendingStickers[taskIndex];
+        await generateSticker(task, task.originalIndex);
+        
+        if (!isCancelledRef.current) {
+          completedCount++;
+          setProgress(Math.round((completedCount / stickers.length) * 100));
+        }
       }
+    };
+
+    // Khởi tạo các workers chạy song song
+    const workers = [];
+    for (let i = 0; i < Math.min(CONCURRENCY_LIMIT, pendingStickers.length); i++) {
+      workers.push(worker());
     }
+
+    // Chờ tất cả các luồng hoàn thành
+    await Promise.all(workers);
     
+    // Nếu không bị hủy thì set trạng thái hoàn thành
+    if (!isCancelledRef.current) {
+      setIsGenerating(false);
+    }
+  };
+
+  // Tối ưu 3: Hàm Hủy tiến trình
+  const handleCancel = () => {
+    isCancelledRef.current = true;
     setIsGenerating(false);
+    // Chuyển các sticker đang 'generating' về lại 'idle'
+    setStickers(prev => prev.map(s => s.status === 'generating' ? { ...s, status: 'idle' } : s));
   };
 
   const downloadImage = (url, name) => {
@@ -236,10 +258,14 @@ const App = () => {
     document.body.removeChild(link);
   };
 
+  // Cleanup hàm khi component unmount
+  useEffect(() => {
+    return () => { isCancelledRef.current = true; };
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto">
-        {/* Header - Thiết kế lại hiện đại hơn */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-8 gap-6 bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200/60">
           <div className="flex items-start md:items-center gap-5">
             <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-4 rounded-2xl shadow-lg shadow-blue-200 shrink-0">
@@ -251,7 +277,7 @@ const App = () => {
               </h1>
               <p className="text-slate-500 text-sm font-medium flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-500" />
-                Công nghệ giữ nguyên nét mặt (100% Thực tế) • 30 Trạng thái
+                Tốc độ cao • Xử lý đa luồng (Concurrency)
               </p>
             </div>
           </div>
@@ -264,30 +290,42 @@ const App = () => {
               className="hidden" 
               ref={fileInputRef}
               onChange={handleImageUpload}
+              disabled={isGenerating}
             />
             <button
               onClick={() => fileInputRef.current.click()}
-              className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-4 bg-white border-2 border-indigo-100 text-indigo-600 rounded-2xl font-bold hover:bg-indigo-50 hover:border-indigo-200 transition-all"
+              disabled={isGenerating}
+              className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-4 bg-white border-2 rounded-2xl font-bold transition-all ${isGenerating ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 'border-indigo-100 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'}`}
             >
               <Plus className="w-5 h-5" />
               Thêm ảnh bé
             </button>
-            <button
-              onClick={generateAll}
-              disabled={isGenerating || sourceImages.length === 0}
-              className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95 ${
-                isGenerating || sourceImages.length === 0
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none' 
-                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-blue-200'
-              }`}
-            >
-              {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
-              {isGenerating ? `Đang xử lý ${progress}%...` : 'Tạo 30 Sticker'}
-            </button>
+            
+            {isGenerating ? (
+              <button
+                onClick={handleCancel}
+                className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95 bg-rose-500 text-white hover:bg-rose-600 shadow-rose-200"
+              >
+                <XCircle className="w-5 h-5" />
+                Dừng tạo ({progress}%)
+              </button>
+            ) : (
+              <button
+                onClick={generateAll}
+                disabled={sourceImages.length === 0}
+                className={`flex-1 lg:flex-none flex items-center justify-center gap-2 px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95 ${
+                  sourceImages.length === 0
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none' 
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-blue-200'
+                }`}
+              >
+                <RefreshCw className="w-5 h-5" />
+                Bắt đầu Tạo Sticker
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Cảnh báo / Lỗi */}
         {error && (
           <div className="mb-6 p-4 bg-rose-50 border border-rose-100 text-rose-600 rounded-2xl flex items-center gap-3 font-medium">
             <AlertCircle className="w-5 h-5 shrink-0" />
@@ -295,16 +333,15 @@ const App = () => {
           </div>
         )}
 
-        {/* Khu vực thư viện ảnh upload */}
         <div className="mb-10 bg-white rounded-[2rem] border border-slate-200/60 shadow-sm overflow-hidden">
           <div className="p-4 md:p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
             <h3 className="font-bold text-slate-800 flex items-center gap-2">
               <ImageIcon className="w-5 h-5 text-indigo-500" />
               Dữ liệu khuôn mặt ({sourceImages.length} ảnh)
             </h3>
-            {sourceImages.length > 0 && (
-              <span className="text-xs font-semibold px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full">
-                Sẵn sàng xử lý
+            {isGenerating && (
+              <span className="flex items-center gap-2 text-xs font-semibold px-3 py-1 bg-blue-100 text-blue-700 rounded-full animate-pulse">
+                <Loader2 className="w-3 h-3 animate-spin" /> Đang xử lý đa luồng...
               </span>
             )}
           </div>
@@ -314,21 +351,24 @@ const App = () => {
               <div key={img.id} className="relative group">
                 <img 
                   src={img.preview} 
-                  className="w-24 h-24 rounded-2xl object-cover border-2 border-slate-100 transition-all group-hover:border-indigo-400 shadow-sm" 
+                  className={`w-24 h-24 rounded-2xl object-cover border-2 transition-all shadow-sm ${isGenerating ? 'border-slate-200 opacity-80' : 'border-slate-100 group-hover:border-indigo-400'}`} 
                   alt="Nguồn" 
                 />
-                <button 
-                  onClick={() => removeImage(img.id)}
-                  className="absolute -top-2 -right-2 p-1.5 bg-rose-500 text-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-600 scale-90 group-hover:scale-100"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {!isGenerating && (
+                  <button 
+                    onClick={() => removeImage(img.id)}
+                    className="absolute -top-2 -right-2 p-1.5 bg-rose-500 text-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-600 scale-90 group-hover:scale-100"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             ))}
             
             <button 
               onClick={() => fileInputRef.current.click()}
-              className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center text-slate-400 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50 transition-all bg-slate-50"
+              disabled={isGenerating}
+              className={`w-24 h-24 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center transition-all bg-slate-50 ${isGenerating ? 'border-slate-200 text-slate-300 cursor-not-allowed' : 'border-slate-300 text-slate-400 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50'}`}
             >
               <Plus className="w-7 h-7 mb-1" />
               <span className="text-[10px] font-bold uppercase tracking-wider">Tải lên</span>
@@ -336,28 +376,26 @@ const App = () => {
           </div>
         </div>
 
-        {/* Thanh tiến trình */}
         {isGenerating && (
           <div className="mb-8 p-6 bg-white rounded-3xl shadow-sm border border-slate-200/60">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-bold text-slate-700">Tiến trình tạo Sticker...</span>
+              <span className="text-sm font-bold text-slate-700">Tốc độ xử lý: ~3 ảnh/lần...</span>
               <span className="text-sm font-bold text-indigo-600">{progress}%</span>
             </div>
             <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
               <div 
-                className="bg-gradient-to-r from-blue-500 to-indigo-600 h-3 rounded-full transition-all duration-500 ease-out" 
+                className="bg-gradient-to-r from-blue-500 to-indigo-600 h-3 rounded-full transition-all duration-300 ease-out" 
                 style={{ width: `${progress}%` }}
               ></div>
             </div>
           </div>
         )}
 
-        {/* Lưới Sticker - Chia làm 6 cột trên Desktop cho 30 ảnh */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
           {stickers.map((sticker, index) => (
             <div 
               key={sticker.id} 
-              className={`bg-white rounded-3xl p-3 shadow-sm border border-slate-200/60 flex flex-col items-center group transition-all duration-300 ${sourceImages.length > 0 ? 'hover:shadow-xl hover:-translate-y-1.5 hover:border-indigo-200' : 'opacity-50'}`}
+              className={`bg-white rounded-3xl p-3 shadow-sm border border-slate-200/60 flex flex-col items-center group transition-all duration-300 ${sourceImages.length > 0 && !isGenerating ? 'hover:shadow-xl hover:-translate-y-1.5 hover:border-indigo-200' : ''}`}
             >
               <div className="relative w-full aspect-square rounded-[1.25rem] bg-slate-50 flex items-center justify-center overflow-hidden mb-4 border border-slate-100">
                 {sticker.status === 'done' ? (
@@ -387,7 +425,13 @@ const App = () => {
                 ) : sticker.status === 'error' ? (
                   <div className="flex flex-col items-center gap-2">
                     <AlertCircle className="w-8 h-8 text-rose-300" />
-                    <button onClick={() => generateSticker(sticker, index)} className="text-[11px] px-3 py-1 bg-rose-50 text-rose-600 font-bold rounded-lg hover:bg-rose-100 transition-colors">Thử lại</button>
+                    <button 
+                      onClick={() => generateSticker(sticker, index)} 
+                      disabled={isGenerating}
+                      className="text-[11px] px-3 py-1 bg-rose-50 text-rose-600 font-bold rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
+                    >
+                      Thử lại
+                    </button>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-slate-300">
@@ -407,7 +451,7 @@ const App = () => {
         </div>
 
         <footer className="mt-16 text-center text-slate-400 text-sm pb-10">
-          <p>© 2024 • Zalo Sticker Studio Pro • Chuyên dùng cho thiết kế cá nhân hóa</p>
+          <p>© 2024 • Zalo Sticker Studio Pro • Tối ưu hóa đa luồng</p>
         </footer>
       </div>
     </div>
